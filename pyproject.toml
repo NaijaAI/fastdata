@@ -1,3 +1,38 @@
+[project]
+name = "fastdata"
+version = "0.0.5"
+description = "Synthetic data generation using LLMs"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {file = "LICENSE"}
+authors = [
+    {name = "FastData Contributors"}
+]
+urls = {
+    "Homepage" = "https://github.com/AnswerDotAI/fastdata",
+    "Repository" = "https://github.com/AnswerDotAI/fastdata"
+}
+keywords = ["synthetic-data", "llm", "data-generation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "datasets>=4.0.0",
+    "huggingface-hub>=0.34.3",
+    "mirascope>=1.25.4",
+    "openai>=1.98.0",
+    "ratelimit>=2.2.1",
+    "tqdm>=4.67.1",
+]
+
 [build-system]
 requires = ["setuptools>=64.0"]
 build-backend = "setuptools.build_meta"
