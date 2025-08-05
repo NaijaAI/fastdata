@@ -13,11 +13,11 @@ from pathlib import Path
 from uuid import uuid4
 from typing import Optional, Union
 
+from pydantic import BaseModel
 from tqdm import tqdm
-from fastcore.utils import *
+from mirascope import Messages, llm
 from ratelimit import limits, sleep_and_retry
 from huggingface_hub import CommitScheduler, DatasetCard
-from claudette import *
 
 # %% ../nbs/00_core.ipynb 4
 DATASET_CARD_TEMPLATE = """
@@ -58,22 +58,31 @@ The dataset was generated using [Fastdata](https://github.com/AnswerDotAI/fastda
 
 class FastData:
     def __init__(self,
-                 model: str = "claude-3-haiku-20240307",
+                 model: str = "gpt-4.1-nano",
+                 provider: str = "openai",
                  calls: int = 100,
-                 period: int = 60):
-        self.cli = Client(model)
+                 period: int = 60,
+                 client: object | None = None
+                 ):
+        self.cli = client
         self._set_rate_limit(calls, period)
+        self.provider = provider
+        self.model = model
 
     def _set_rate_limit(self, calls: int, period: int):
         """Set a new rate limit."""
         @sleep_and_retry
         @limits(calls=calls, period=period)
-        def rate_limited_call(prompt: str, schema, temp: float, sp: str):
-            return self.cli.structured(
-                prompt,
-                temp=temp,
-                tools=schema,
-            )[0]
+        def rate_limited_call(prompt: str, schema: BaseModel, temp: float, sp: str):
+            @llm.call(provider=self.provider, model=self.model, response_model=schema, call_params={"temperature": temp})
+            def structured(text: str):
+                return [
+                    Messages.System(sp),
+                    Messages.User(text)
+                ]
+            
+            return structured(text=prompt).model_dump()
+
         
         self._rate_limited_call = rate_limited_call
 
@@ -221,3 +230,4 @@ class FastData:
                 shutil.rmtree(dataset_dir)
 
         return scheduler.repo_id, [f.result() for f in futures if f.done()]
+
