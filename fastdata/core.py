@@ -25,6 +25,9 @@ DATASET_CARD_TEMPLATE = """
 tags:
 - fastdata
 - synthetic
+configs:
+- config_name: default
+  data_files: "data/*.jsonl"
 ---
 
 # {title}
@@ -99,7 +102,10 @@ class FastData:
     def _save_results(self, results: list[dict], save_path: Path) -> None:
         with open(save_path, "w") as f:
             for res in results:
-                obj_dict = getattr(res, "__stored_args__", res.__dict__)
+                if isinstance(res, dict):
+                    obj_dict = res
+                else:
+                    obj_dict = getattr(res, "__stored_args__", res.__dict__)
                 f.write(json.dumps(obj_dict) + "\n")
 
     def generate(self, 
@@ -187,7 +193,7 @@ class FastData:
                 DatasetCard(
                     DATASET_CARD_TEMPLATE.format(
                         title=repo_id,
-                        model_id=self.cli.model,
+                        model_id=self.model,
                         system_prompt=sp,
                         prompt_template=prompt_template,
                         sample_input=inputs[:2],
@@ -214,16 +220,25 @@ class FastData:
                     ]
 
                     current_file = data_dir / f"train-{uuid4()}.jsonl"
+                    current_batch = []
                     for completed_future in concurrent.futures.as_completed(futures):
                         result = completed_future.result()
                         if result is not None:
                             results.append(result)
-                            with scheduler.lock:
-                                self._save_results(results, current_file)
+                            current_batch.append(result)
                         pbar.update(1)
-                        if len(results) >= max_items_per_file:
+                        
+                        # Only create new file when we reach the limit
+                        if len(current_batch) >= max_items_per_file:
+                            with scheduler.lock:
+                                self._save_results(current_batch, current_file)
                             current_file = data_dir / f"train-{uuid4()}.jsonl"
-                            results.clear()
+                            current_batch.clear()
+                    
+                    # Save any remaining items in the last batch
+                    if current_batch:
+                        with scheduler.lock:
+                            self._save_results(current_batch, current_file)
         finally:
             scheduler.trigger().result()  # force upload last result
             if delete_files_after:
