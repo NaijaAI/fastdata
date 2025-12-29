@@ -369,19 +369,23 @@ def main():
     # Parallel execution
     valid_count = 0
     failed_count = 0
+    submitted = 0
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
         futures = {}
 
-        # Submit tasks with rate limiting
-        for idx in to_process:
+        # Submit initial batch
+        initial_batch = min(args.workers * 2, len(to_process))
+        for idx in to_process[:initial_batch]:
             future = executor.submit(
                 process_combo, idx, all_inputs[idx], api_key, output_file, failed_file
             )
             futures[future] = idx
-            time.sleep(1.0 / args.workers)  # Stagger submissions
+            submitted += 1
 
-        # Process results as they complete
+        print(f"Submitted first {submitted} tasks, waiting for results...\n")
+
+        # Process results and submit more as they complete
         completed = 0
         for future in concurrent.futures.as_completed(futures):
             idx, success = future.result()
@@ -400,6 +404,21 @@ def main():
             print(
                 f"{status} {completed}/{len(to_process)}: {combo['topic']} - {combo['genre']}"
             )
+
+            # Submit next task to maintain worker pool
+            if submitted < len(to_process):
+                next_idx = to_process[submitted]
+                new_future = executor.submit(
+                    process_combo,
+                    next_idx,
+                    all_inputs[next_idx],
+                    api_key,
+                    output_file,
+                    failed_file,
+                )
+                futures[new_future] = next_idx
+                submitted += 1
+                time.sleep(0.5)  # Small delay between submissions
 
     # Summary
     print(f"\n✅ Valid: {valid_count}/{len(to_process)}")
