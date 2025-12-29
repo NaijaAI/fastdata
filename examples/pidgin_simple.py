@@ -372,23 +372,23 @@ def main():
     submitted = 0
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
-        futures = {}
-
-        # Submit initial batch
-        initial_batch = min(args.workers * 2, len(to_process))
-        for idx in to_process[:initial_batch]:
+        # Submit all tasks
+        future_to_idx = {}
+        for idx in to_process:
             future = executor.submit(
                 process_combo, idx, all_inputs[idx], api_key, output_file, failed_file
             )
-            futures[future] = idx
-            submitted += 1
+            future_to_idx[future] = idx
 
-        print(f"Submitted first {submitted} tasks, waiting for results...\n")
+        print(
+            f"Submitted {len(to_process)} tasks, processing with {args.workers} workers...\n"
+        )
 
-        # Process results and submit more as they complete
+        # Process results as they complete
         completed = 0
-        for future in concurrent.futures.as_completed(futures):
-            idx, success = future.result()
+        for future in concurrent.futures.as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            _, success = future.result()
             processed.add(idx)
             save_progress(output_dir, processed, len(all_inputs))
 
@@ -404,21 +404,6 @@ def main():
             print(
                 f"{status} {completed}/{len(to_process)}: {combo['topic']} - {combo['genre']}"
             )
-
-            # Submit next task to maintain worker pool
-            if submitted < len(to_process):
-                next_idx = to_process[submitted]
-                new_future = executor.submit(
-                    process_combo,
-                    next_idx,
-                    all_inputs[next_idx],
-                    api_key,
-                    output_file,
-                    failed_file,
-                )
-                futures[new_future] = next_idx
-                submitted += 1
-                time.sleep(0.5)  # Small delay between submissions
 
     # Summary
     print(f"\n✅ Valid: {valid_count}/{len(to_process)}")
