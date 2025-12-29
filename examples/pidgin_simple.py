@@ -3,17 +3,27 @@ Simple Nigerian Pidgin generator using OpenRouter API directly.
 Saves both valid and failed results locally.
 """
 
+import argparse
+import concurrent.futures
 import itertools
 import json
 import os
 import random
 import re
 import sys
+import threading
 import time
 from pathlib import Path
+from typing import Set
 
 import requests
 from pydantic import BaseModel
+
+# =============================================================================
+# GLOBAL
+# =============================================================================
+
+write_lock = threading.Lock()
 
 # =============================================================================
 # SCHEMA
@@ -51,6 +61,15 @@ topics = [
     "police_and_security",
     "marriage_and_weddings",
     "death_and_funerals",
+    "current_events",
+    "science_and_nature",
+    "history_and_culture",
+    "law_and_justice",
+    "environment_and_climate",
+    "business_and_economy",
+    "youth_and_children",
+    "women_and_gender",
+    "mental_health",
 ]
 
 genres = [
@@ -66,6 +85,14 @@ genres = [
     "praise",
     "gossip",
     "testimony",
+    "article",
+    "news_analysis",
+    "lecture",
+    "sermon",
+    "speech",
+    "opinion",
+    "review",
+    "announcement",
 ]
 
 settings = [
@@ -160,8 +187,12 @@ Tone: {combo["tone"]}
 Speaker: {combo["speaker"]}
 Time: {combo["time_period"]}
 
-Write 200-500 words in Pidgin only.
-Make it natural like real Naija people talk.
+Requirements:
+- Write 200-500 words in Pidgin only
+- Make it natural like real Naija people talk
+- Vary your sentence structure and opening words
+- Don't start every sentence with "Ehen" or the same pattern
+- Use different ways to begin sentences naturally
 
 Return ONLY valid JSON:
 {{
@@ -169,10 +200,12 @@ Return ONLY valid JSON:
   "content": "the full text in pidgin (200-500 words)"
 }}"""
 
-    system_prompt = """You are a Nigerian Pidgin speaker. Write authentic Pidgin text.
+    system_prompt = """You are a Nigerian Pidgin speaker. Write authentic, diverse Pidgin text.
 Use common words: wetin, dey, na, abi, walahi.
-Use exclamations: Chei!, Haba!, Ehen!
-Stay in Pidgin only. No English sentences."""
+Use exclamations naturally: Chei!, Haba!, Ehen! (but don't overuse them).
+Vary your sentence openings - use different words and structures.
+Stay in Pidgin only. No English sentences.
+Write naturally, not formulaically."""
 
     try:
         response = requests.post(
@@ -215,71 +248,176 @@ Stay in Pidgin only. No English sentences."""
 
 
 # =============================================================================
+# PROGRESS TRACKING
+# =============================================================================
+
+
+def load_progress(output_dir: Path) -> Set[int]:
+    """Load processed indices from progress file."""
+    progress_file = output_dir / "progress.json"
+    if progress_file.exists():
+        with open(progress_file) as f:
+            data = json.load(f)
+            return set(data.get("processed_indices", []))
+    return set()
+
+
+def save_progress(output_dir: Path, processed: Set[int], total: int):
+    """Save processed indices to progress file."""
+    progress_file = output_dir / "progress.json"
+    with write_lock:
+        with open(progress_file, "w") as f:
+            json.dump(
+                {
+                    "processed_indices": sorted(list(processed)),
+                    "seed": 42,
+                    "total": total,
+                },
+                f,
+            )
+
+
+def process_combo(
+    index: int, combo: dict, api_key: str, output_file: Path, failed_file: Path
+):
+    """Worker function to process one combination."""
+    result, error = generate_one(api_key, combo)
+
+    with write_lock:
+        if result:
+            with open(output_file, "a") as f:
+                f.write(json.dumps(result, ensure_ascii=False) + "\n")
+        else:
+            failed_entry = {"combo": combo, "error": error}
+            with open(failed_file, "a") as f:
+                f.write(json.dumps(failed_entry, ensure_ascii=False) + "\n")
+
+    return index, bool(result)
+
+
+# =============================================================================
 # MAIN
 # =============================================================================
 
-if __name__ == "__main__":
+
+def main():
+    # Parse arguments
+    parser = argparse.ArgumentParser(
+        description="Generate Nigerian Pidgin synthetic data"
+    )
+    parser.add_argument(
+        "--test", action="store_true", help="Generate 5 examples for testing"
+    )
+    parser.add_argument(
+        "--workers", type=int, default=2, help="Number of parallel workers (default: 2)"
+    )
+    parser.add_argument(
+        "--num",
+        type=int,
+        default=1000,
+        help="Number of examples to generate (default: 1000)",
+    )
+    parser.add_argument(
+        "--no-resume", action="store_true", help="Start fresh, ignore progress file"
+    )
+    args = parser.parse_args()
+
     # Get API key
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
         print("Error: OPENROUTER_API_KEY not set")
         sys.exit(1)
 
-    # Setup
-    inputs = generate_inputs()
-    print(f"Total combinations: {len(inputs)}")
-
-    # How many to generate
-    num = 5 if "--test" in sys.argv else 1000
-    print(f"Generating {num} examples...\n")
-
-    # Output dir
+    # Setup output directory
     output_dir = Path("pidgin_data")
     output_dir.mkdir(exist_ok=True)
     output_file = output_dir / "data.jsonl"
     failed_file = output_dir / "failed.jsonl"
 
-    # Clear files in test mode
-    if "--test" in sys.argv:
+    # Generate all inputs
+    all_inputs = generate_inputs()
+    print(f"Total combinations: {len(all_inputs)}")
+
+    # Load progress
+    processed = set() if args.no_resume else load_progress(output_dir)
+    if processed:
+        print(f"Resuming: {len(processed)} already processed")
+
+    # Clear files in test mode with no resume
+    if args.test and args.no_resume:
         if output_file.exists():
             output_file.unlink()
         if failed_file.exists():
             failed_file.unlink()
+        processed = set()
 
-    # Generate
+    # Get unprocessed indices
+    unprocessed = [i for i in range(len(all_inputs)) if i not in processed]
+
+    # Determine how many to process
+    if args.test:
+        to_process = unprocessed[:5]
+    else:
+        to_process = unprocessed[: args.num]
+
+    if not to_process:
+        print("No unprocessed combinations to generate!")
+        return
+
+    print(f"Generating {len(to_process)} examples with {args.workers} workers...\n")
+
+    # Parallel execution
     valid_count = 0
     failed_count = 0
 
-    for i, combo in enumerate(inputs[:num], 1):
-        print(f"{i}/{num}: {combo['topic']} - {combo['genre']}")
+    with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
+        futures = {}
 
-        result, error = generate_one(api_key, combo)
+        # Submit tasks with rate limiting
+        for idx in to_process:
+            future = executor.submit(
+                process_combo, idx, all_inputs[idx], api_key, output_file, failed_file
+            )
+            futures[future] = idx
+            time.sleep(1.0 / args.workers)  # Stagger submissions
 
-        if result:
-            valid_count += 1
-            with open(output_file, "a") as f:
-                f.write(json.dumps(result, ensure_ascii=False) + "\n")
-            print(f"  ✓ Success")
-        else:
-            failed_count += 1
-            failed_entry = {"combo": combo, "error": error}
-            with open(failed_file, "a") as f:
-                f.write(json.dumps(failed_entry, ensure_ascii=False) + "\n")
-            print(f"  ✗ Failed: {error[:50]}")
+        # Process results as they complete
+        completed = 0
+        for future in concurrent.futures.as_completed(futures):
+            idx, success = future.result()
+            processed.add(idx)
+            save_progress(output_dir, processed, len(all_inputs))
 
-        # Rate limit
-        time.sleep(1)
+            completed += 1
+            if success:
+                valid_count += 1
+                status = "✓"
+            else:
+                failed_count += 1
+                status = "✗"
 
-    print(f"\n✅ Valid: {valid_count}/{num}")
-    print(f"❌ Failed: {failed_count}/{num}")
+            combo = all_inputs[idx]
+            print(
+                f"{status} {completed}/{len(to_process)}: {combo['topic']} - {combo['genre']}"
+            )
+
+    # Summary
+    print(f"\n✅ Valid: {valid_count}/{len(to_process)}")
+    print(f"❌ Failed: {failed_count}/{len(to_process)}")
     print(f"📁 Valid saved to: {output_file}")
     if failed_count > 0:
         print(f"📁 Failed saved to: {failed_file}")
+    print(f"📊 Progress: {len(processed)}/{len(all_inputs)} total processed")
 
     # Show sample
-    if valid_count > 0:
+    if valid_count > 0 and output_file.exists():
         with open(output_file) as f:
             first_line = f.readline()
-        sample = json.loads(first_line)
-        print(f"\n📄 Sample output:")
-        print(json.dumps(sample, indent=2, ensure_ascii=False))
+        if first_line:
+            sample = json.loads(first_line)
+            print(f"\n📄 Sample output:")
+            print(json.dumps(sample, indent=2, ensure_ascii=False))
+
+
+if __name__ == "__main__":
+    main()
