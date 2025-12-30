@@ -228,7 +228,22 @@ Random seed: {random.choice(range(500_000_000))
         )
 
         response.raise_for_status()
-        text = response.json()["choices"][0]["message"]["content"]
+
+        # Parse response and check for errors
+        response_data = response.json()
+
+        # Check if response contains error
+        if "error" in response_data:
+            error_msg = response_data["error"].get(
+                "message", str(response_data["error"])
+            )
+            return None, f"API Error: {error_msg}"
+
+        # Check if choices exist
+        if "choices" not in response_data or not response_data["choices"]:
+            return None, f"No choices in response: {response_data}"
+
+        text = response_data["choices"][0]["message"]["content"]
 
         # Extract JSON
         if "```json" in text:
@@ -240,6 +255,22 @@ Random seed: {random.choice(range(500_000_000))
 
         # Clean control characters
         json_str = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", json_str)
+
+        # Fix common invalid escape sequences by escaping backslashes
+        # This handles cases like \s, \n in content that aren't valid JSON escapes
+        # Only preserve valid JSON escapes: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
+        def fix_escapes(match):
+            escaped = match.group(1)
+            # Valid single-char escapes in JSON
+            if escaped in ['"', "\\", "/", "b", "f", "n", "r", "t"]:
+                return match.group(0)
+            # Unicode escapes
+            if escaped.startswith("u") and len(escaped) == 5:
+                return match.group(0)
+            # Invalid escape - escape the backslash
+            return "\\\\" + escaped
+
+        json_str = re.sub(r"\\(.)", fix_escapes, json_str)
 
         # Parse and validate
         data = json.loads(json_str)
@@ -317,8 +348,8 @@ def main():
     parser.add_argument(
         "--num",
         type=int,
-        default=1000,
-        help="Number of examples to generate (default: 1000)",
+        default=5000,
+        help="Number of examples to generate (default: 5000)",
     )
     parser.add_argument(
         "--no-resume", action="store_true", help="Start fresh, ignore progress file"
@@ -389,22 +420,26 @@ def main():
     # Parallel execution
     valid_count = 0
     failed_count = 0
+    submitted = 0
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.workers) as executor:
-        futures = {}
-
-        # Submit tasks with rate limiting
+        # Submit all tasks
+        future_to_idx = {}
         for idx in to_process:
             future = executor.submit(
                 process_combo, idx, all_inputs[idx], api_key, output_file, failed_file, lang, n_docs, use_exclamations, common_words
             )
-            futures[future] = idx
-            time.sleep(1.0 / args.workers)  # Stagger submissions
+            future_to_idx[future] = idx
+
+        print(
+            f"Submitted {len(to_process)} tasks, processing with {args.workers} workers...\n"
+        )
 
         # Process results as they complete
         completed = 0
-        for future in concurrent.futures.as_completed(futures):
-            idx, success = future.result()
+        for future in concurrent.futures.as_completed(future_to_idx):
+            idx = future_to_idx[future]
+            _, success = future.result()
             processed.add(idx)
             save_progress(output_dir, processed, len(all_inputs))
 
