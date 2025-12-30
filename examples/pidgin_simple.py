@@ -93,6 +93,7 @@ genres = [
     "opinion",
     "review",
     "announcement",
+    "science"
 ]
 
 settings = [
@@ -178,7 +179,7 @@ def generate_inputs(shuffle=True):
     ]
 
 
-def generate_one(api_key, combo):
+def generate_one(api_key, combo, lang="Pidgin", n_docs = 15,  use_exclamations="Chei!, Haba!, Ehen!", common_words="wetin, dey, na, abi, walahi, omo, sey, fa"):
     """Generate one example. Returns (valid_dict, error) or (None, error)."""
 
     prompt = f"""Write a {combo["genre"]} in Nigerian Pidgin about {combo["topic"]}.
@@ -188,7 +189,7 @@ Speaker: {combo["speaker"]}
 Time: {combo["time_period"]}
 
 Requirements:
-- Write 200-500 words in Pidgin only
+- Write {n_docs} unique text documents, each with 200-500 words in {lang} only (separated by a "</s>" tag)
 - Make it natural like real Naija people talk
 - Vary your sentence structure and opening words
 - Don't start every sentence with "Ehen" or the same pattern
@@ -196,17 +197,19 @@ Requirements:
 
 Return ONLY valid JSON:
 {{
-  "title": "short title in pidgin",
-  "content": "the full text in pidgin (200-500 words)"
+  "title": "short title in {lang}",
+  "content": "the full text of {n_docs} unique documents in {lang} language (ranging from200-500 words and separated by a `</s>` tag)"
 }}"""
 
-    system_prompt = """You are a Nigerian Pidgin speaker. Write authentic, diverse Pidgin text.
-Use common words: wetin, dey, na, abi, walahi.
-Use exclamations naturally: Chei!, Haba!, Ehen! (but don't overuse them).
+    system_prompt = f"""You are a Nigerian {lang} speaker. Write authentic, diverse {lang} text.
+Use common words: {common_words}.
+Use exclamations naturally: {use_exclamations} (but don't overuse them).
 Vary your sentence openings - use different words and structures.
-Stay in Pidgin only. No English sentences.
-Write naturally, not formulaically."""
-
+Stay in {lang} only. No English sentences.
+Write naturally, not formulaically.
+Random seed: {random.choice(range(500_000_000))
+}"""
+    
     try:
         response = requests.post(
             "https://openrouter.ai/api/v1/chat/completions",
@@ -278,10 +281,10 @@ def save_progress(output_dir: Path, processed: Set[int], total: int):
 
 
 def process_combo(
-    index: int, combo: dict, api_key: str, output_file: Path, failed_file: Path
+    index: int, combo: dict, api_key: str, output_file: Path, failed_file: Path, lang="Pidgin", n_docs = 15,  use_exclamations="Chei!, Haba!, Ehen!", common_words="wetin, dey, na, abi, walahi, omo, sey, fa"
 ):
     """Worker function to process one combination."""
-    result, error = generate_one(api_key, combo)
+    result, error = generate_one(api_key, combo, lang=lang, n_docs=n_docs, use_exclamations=use_exclamations, common_words=common_words)
 
     with write_lock:
         if result:
@@ -320,8 +323,25 @@ def main():
     parser.add_argument(
         "--no-resume", action="store_true", help="Start fresh, ignore progress file"
     )
+    parser.add_argument(
+        "--lang", type=str, default="Pidgin", help="Language to generate (default: Pidgin)"
+    )
+    parser.add_argument(
+        "--n_docs", type=int, default=15, help="Number of documents to generate per request(default: 15)"
+    )
+    parser.add_argument(
+        "--use_exclamations", type=str, default="Chei!, Haba!, Ehen!", help="Exclamations to use (default: Chei!, Haba!, Ehen!)"
+    )
+    parser.add_argument(
+        "--common_words", type=str, default="wetin, dey, na, abi, walahi, omo, sey, fa", help="Common words to use (default: wetin, dey, na, abi, walahi, omo, sey, fa)"
+    )
     args = parser.parse_args()
 
+    lang = args.lang
+    n_docs = args.n_docs
+    use_exclamations = args.use_exclamations
+    common_words = args.common_words
+    
     # Get API key
     api_key = os.getenv("OPENROUTER_API_KEY")
     if not api_key:
@@ -376,7 +396,7 @@ def main():
         # Submit tasks with rate limiting
         for idx in to_process:
             future = executor.submit(
-                process_combo, idx, all_inputs[idx], api_key, output_file, failed_file
+                process_combo, idx, all_inputs[idx], api_key, output_file, failed_file, lang, n_docs, use_exclamations, common_words
             )
             futures[future] = idx
             time.sleep(1.0 / args.workers)  # Stagger submissions
