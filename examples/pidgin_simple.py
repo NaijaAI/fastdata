@@ -225,7 +225,22 @@ Write naturally, not formulaically."""
         )
 
         response.raise_for_status()
-        text = response.json()["choices"][0]["message"]["content"]
+
+        # Parse response and check for errors
+        response_data = response.json()
+
+        # Check if response contains error
+        if "error" in response_data:
+            error_msg = response_data["error"].get(
+                "message", str(response_data["error"])
+            )
+            return None, f"API Error: {error_msg}"
+
+        # Check if choices exist
+        if "choices" not in response_data or not response_data["choices"]:
+            return None, f"No choices in response: {response_data}"
+
+        text = response_data["choices"][0]["message"]["content"]
 
         # Extract JSON
         if "```json" in text:
@@ -237,6 +252,22 @@ Write naturally, not formulaically."""
 
         # Clean control characters
         json_str = re.sub(r"[\x00-\x1f\x7f-\x9f]", "", json_str)
+
+        # Fix common invalid escape sequences by escaping backslashes
+        # This handles cases like \s, \n in content that aren't valid JSON escapes
+        # Only preserve valid JSON escapes: \", \\, \/, \b, \f, \n, \r, \t, \uXXXX
+        def fix_escapes(match):
+            escaped = match.group(1)
+            # Valid single-char escapes in JSON
+            if escaped in ['"', "\\", "/", "b", "f", "n", "r", "t"]:
+                return match.group(0)
+            # Unicode escapes
+            if escaped.startswith("u") and len(escaped) == 5:
+                return match.group(0)
+            # Invalid escape - escape the backslash
+            return "\\\\" + escaped
+
+        json_str = re.sub(r"\\(.)", fix_escapes, json_str)
 
         # Parse and validate
         data = json.loads(json_str)
@@ -314,8 +345,8 @@ def main():
     parser.add_argument(
         "--num",
         type=int,
-        default=1000,
-        help="Number of examples to generate (default: 1000)",
+        default=5000,
+        help="Number of examples to generate (default: 5000)",
     )
     parser.add_argument(
         "--no-resume", action="store_true", help="Start fresh, ignore progress file"
