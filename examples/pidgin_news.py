@@ -249,7 +249,8 @@ def generate_inputs(shuffle=True, seed=None):
     ]
 
 
-def generate_one(api_key, combo):
+def generate_one(api_key, combo,  lang="Pidgin", n_docs = 15,  use_exclamations="Chei!, Haba!, Ehen!", 
+    common_words="wetin, dey, na, abi, walahi, omo, sey, fa"):
     """Generate one example. Returns (valid_dict, error) or (None, error)."""
     global last_request_time
 
@@ -271,25 +272,27 @@ Context:
 - Complexity: {combo["complexity"]}
 
 Requirements:
-- Write 250-600 words in Nigerian Pidgin
+- Write {n_docs} unique text documents, each with 250-600 words in {lang} only (separated by a "</s>" tag)
 - Maintain professional/formal style appropriate for {combo["genre"]}
-- Use Pidgin naturally but keep it informative and structured
+- Use {lang} naturally but keep it informative and structured
 - Include relevant details and context for the topic
 - Vary sentence structure and opening patterns
 
 Return ONLY valid JSON:
 {{
-  "title": "professional title in pidgin",
-  "content": "the full text in pidgin (250-600 words)"
+  "title": "professional title in {lang}",
+  "content": "the full text of {n_docs} unique documents in {lang} language (ranging from 250-500 words and separated by a `</s>` tag)"
 }}"""
 
-    system_prompt = """You are a professional Nigerian Pidgin speaker covering formal/news content.
-Write authentic Nigerian Pidgin that is professional and informative.
-Use common Pidgin words naturally: wetin, dey, na, go, fit, don, abi.
+    system_prompt = f"""You are a professional Nigerian {lang} speaker covering formal/news content.
+Write authentic Nigerian {lang} that is professional and informative.
+Use common {lang} words naturally: {common_words}.
 Keep the tone appropriate for news, lectures, or formal articles.
-Be clear and structured while staying authentic to Pidgin.
+Be clear and structured while staying authentic to {lang}.
 Avoid overly casual exclamations unless contextually appropriate.
-Focus on delivering information clearly in natural Pidgin."""
+Focus on delivering information clearly in natural {lang}.
+Random seed: {random.choice(range(500_000_000))
+}"""
 
     try:
         response = requests.post(
@@ -398,10 +401,11 @@ def save_progress(output_dir: Path, successful: Set[int], total: int, seed: int)
 
 
 def process_combo(
-    index: int, combo: dict, api_key: str, output_file: Path, failed_file: Path
+    index: int, combo: dict, api_key: str, output_file: Path, failed_file: Path, lang="Pidgin", n_docs = 15,  use_exclamations="Chei!, Haba!, Ehen!", 
+    common_words="wetin, dey, na, abi, walahi, omo, sey, fa"
 ):
     """Worker function to process one combination."""
-    result, error = generate_one(api_key, combo)
+    result, error = generate_one(api_key, combo, lang=lang, n_docs=n_docs, use_exclamations=use_exclamations, common_words=common_words)
 
     with write_lock:
         if result:
@@ -451,7 +455,27 @@ def main():
         action="store_true",
         help="Use timestamped output filenames",
     )
+    
+    parser.add_argument(
+        "--lang", type=str, default="Pidgin", help="Language to generate (default: Pidgin)"
+    )
+    parser.add_argument(
+        "--n_docs", type=int, default=15, help="Number of documents to generate per request(default: 15)"
+    )
+    parser.add_argument(
+        "--use_exclamations", type=str, default="Chei!, Haba!, Ehen!", help="Exclamations to use (default: Chei!, Haba!, Ehen!)"
+    )
+    parser.add_argument(
+        "--common_words", type=str, default="wetin, dey, na, abi, walahi, omo, sey, fa", help="Common words to use (default: wetin, dey, na, abi, walahi, omo, sey, fa)"
+    )
+    
+    
     args = parser.parse_args()
+    
+    lang = args.lang
+    n_docs = args.n_docs
+    use_exclamations = args.use_exclamations
+    common_words = args.common_words
 
     # Get API key
     api_key = os.getenv("OPENROUTER_API_KEY")
@@ -518,7 +542,7 @@ def main():
         future_to_idx = {}
         for idx in to_process:
             future = executor.submit(
-                process_combo, idx, all_inputs[idx], api_key, output_file, failed_file
+                process_combo, idx, all_inputs[idx], api_key, output_file, failed_file, lang, n_docs, use_exclamations, common_words
             )
             future_to_idx[future] = idx
 

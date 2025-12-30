@@ -312,7 +312,8 @@ def save_progress(output_dir: Path, processed: Set[int], total: int):
 
 
 def process_combo(
-    index: int, combo: dict, api_key: str, output_file: Path, failed_file: Path, lang="Pidgin", n_docs = 15,  use_exclamations="Chei!, Haba!, Ehen!", common_words="wetin, dey, na, abi, walahi, omo, sey, fa"
+    index: int, combo: dict, api_key: str, output_file: Path, failed_file: Path, lang="Pidgin", n_docs = 15,  use_exclamations="Chei!, Haba!, Ehen!", 
+    common_words="wetin, dey, na, abi, walahi, omo, sey, fa"
 ):
     """Worker function to process one combination."""
     result, error = generate_one(api_key, combo, lang=lang, n_docs=n_docs, use_exclamations=use_exclamations, common_words=common_words)
